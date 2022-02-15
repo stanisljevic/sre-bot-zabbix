@@ -51,15 +51,15 @@ def _create_host(zapi, hostname):
     host_id = res['result']['hostids'][0]
     return host_id
 
-def _get_application(zapi, hostid, application_name):
-    res = zapi.do_request('application.get', {
+def _get_tags(zapi, hostid, tags_name):
+    res = zapi.do_request('host.get',  {
+        "selectTags": "extend",
+        "output": ["hostid"],
         "hostids": hostid,
-        "output": "extend",
-        "filter": {
-            "name": application_name,
-        }
     })
-    return list(map(lambda x: x['applicationid'], res['result']))
+    tags = list(map(lambda x: x['tags'], res['result']))[0]
+    result = list(map(lambda x: x.get('tag') == tags_name, tags))[0]
+    return tags if result else result
 
 def _get_item(zapi, hostid, item_key):
     res = zapi.do_request('item.get', {
@@ -71,7 +71,7 @@ def _get_item(zapi, hostid, item_key):
     })
     return res['result']
 
-def _create_item(zapi, hostid, item_key, name, ttype, applications):
+def _create_item(zapi, hostid, item_key, name, ttype, tagss):
     value_type = {
         'char': 1,
         'float': 0,
@@ -79,7 +79,6 @@ def _create_item(zapi, hostid, item_key, name, ttype, applications):
         'log': 2,
         'text': 4,
     }[ttype]
-
     res = zapi.do_request('item.create', {
         "name": item_key,
         "key_": item_key,
@@ -87,17 +86,17 @@ def _create_item(zapi, hostid, item_key, name, ttype, applications):
         "type": 2, # Zabbix trapper to enable zabbix-send
         "value_type": value_type,
         "delay": "1s",
-        "applications": applications,
+        "tags": tagss,
     })
     item_id = res['result']['itemids'][0]
     return item_id
 
-def _create_application(zapi, hostid, name):
-    res = zapi.do_request('application.create', {
-        "name": name,
+def _create_tags(zapi, hostid, name):
+    res = zapi.do_request('host.update', {
+        "tags": [{"tag": name, "value": name }],
         "hostid": hostid,
     })
-    return res['result']['applicationids']
+    return res['result']['hostids']
 
 def on_message(client, msg, value):
     hostname = msg.topic.split("/")[0]
@@ -131,13 +130,14 @@ def on_message(client, msg, value):
         if not value.get('module'):
             return
 
-        application_name = value['module']
-        if application_name:
-            application_ids = _get_application(zapi, host_id, application_name)
-            if not application_ids:
-                application_ids = _create_application(zapi, host_id, application_name)
+        tags_name = value['module']
+        if tags_name:
+            tags_ids = _get_tags(zapi, host_id, tags_name)
+            if not tags_ids:
+                host_ids = _create_tags(zapi, host_id, tags_name)
+                tags_ids = _get_tags(zapi, host_ids, tags_name)
         else:
-            application_ids = []
+            tags_ids = []
 
         item = _get_item(zapi, host_id, key)
         if not item:
@@ -164,5 +164,5 @@ def on_message(client, msg, value):
             else:
                 ttype = 'char'
 
-            _create_item(zapi, host_id, key, key, ttype, application_ids)
+            _create_item(zapi, host_id, key, key, ttype, tags_ids)
     last_update_info.write_text(str(arrow.get()))
